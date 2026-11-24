@@ -29,7 +29,7 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("pycryptodome is required:  pip install pycryptodome")
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MU = 0x200
 
 # ---------------------------------------------------------------------------
@@ -223,6 +223,55 @@ def patch_twlbg_code(code):
     return code
 
 
+# ---------------------------------------------------------------- touch calibration
+# The emulated user profile ships a generic touch calibration. With --touch-config
+# the calibration is computed from the console's own 3DS calibration (config block
+# 0x00040000), exactly like TwlBg does for scaled DS mode (raw points kept, screen
+# points scaled by 0.8). --touch-y-offset moves the touch point up by N DS pixels.
+US_OFFSET_IN_BLOB = 0x118          # user settings (0x100 bytes) inside EMU_BLOB
+TOUCH_CAL = None                   # (adc_x1, adc_y1, scr_x1, scr_y1, adc_x2, adc_y2, scr_x2, scr_y2)
+
+
+def crc16(data, crc=0xFFFF):
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
+
+
+def read_3ds_touch_block(save):
+    """Find config block 0x00040000 in a GodMode9 copy of sysdata/00010017/00000000."""
+    pos = 0
+    while True:
+        e = save.find(struct.pack("<I", 0x40000), pos)
+        if e < 0:
+            raise SystemExit("ERROR: touch calibration block not found in the config save")
+        pos = e + 1
+        off, size, flags = struct.unpack_from("<IHH", save, e + 4)
+        if size != 0x10:
+            continue
+        for k in range(0x200):
+            base = e - 4 - 12 * k
+            if base < 0:
+                break
+            n, doff = struct.unpack_from("<HH", save, base)
+            if n > k and n < 0x400 and off + 0x10 <= 0x8000 and base + off + 0x10 <= len(save):
+                blk = struct.unpack_from("<8H", save, base + off)
+                if 0 < blk[2] < 320 and 0 < blk[3] < 240 and blk[2] < blk[6] < 320 and blk[3] < blk[7] < 240:
+                    return blk
+
+
+def touch_cal_from_config(path, y_offset=0):
+    rx1, ry1, sx1, sy1, rx2, ry2, sx2, sy2 = read_3ds_touch_block(open(path, "rb").read())
+    cal = [rx1, ry1, int(sx1 * 0.8), int(sy1 * 0.8), rx2, ry2, int(sx2 * 0.8), int(sy2 * 0.8)]
+    if y_offset:
+        k = (cal[5] - cal[1]) / (cal[7] - cal[3])
+        cal[1] = round(cal[1] + y_offset * k)
+        cal[7] -= y_offset
+    return tuple(cal)
+
+
 def patch_hnaa(code):
     logo = bytes.fromhex("24ffae51699aa221")
     p = bytes(code).find(logo)
@@ -240,7 +289,13 @@ def patch_hnaa(code):
     if hashlib.sha256(arm7i[lo:hi]).hexdigest() != EMU_REGION_ORIG_SHA256:
         raise SystemExit("ERROR: ARM7i NVRAM driver does not match the supported version")
     log(f"[hnaa]  ARM7i decrypted, NVRAM SPI driver verified ({EMU_LO:#x}-{EMU_HI:#x})")
-    arm7i[lo:hi] = zlib.decompress(base64.b64decode(EMU_BLOB))
+    region = bytearray(zlib.decompress(base64.b64decode(EMU_BLOB)))
+    if TOUCH_CAL:
+        us = US_OFFSET_IN_BLOB
+        struct.pack_into("<HHBBHHBB", region, us + 0x58, *TOUCH_CAL)
+        struct.pack_into("<H", region, us + 0x72, crc16(region[us:us + 0x70]))
+        log(f"[hnaa]  touch calibration set to {TOUCH_CAL}")
+    arm7i[lo:hi] = region
     log("[hnaa]  NVRAM driver replaced by RAM-backed emulator")
     code[s + off:s + off + size] = modcrypt(bytes(arm7i), key, iv)
     log("[hnaa]  ARM7i re-encrypted")
@@ -280,8 +335,16 @@ def main():
     ap = argparse.ArgumentParser(description=f"NVRAM-Emu patcher v{VERSION}")
     ap.add_argument("input", help="TWL_FIRM .cxi / .firm dump, or TwlBg.cxi")
     ap.add_argument("-o", "--out", default="out", help="output folder (default: out)")
+    ap.add_argument("--touch-config", metavar="CONFIG_SAVE",
+                    help="(experimental) GodMode9 copy of 1:/data/<id>/sysdata/00010017/00000000; "
+                         "the touch calibration is taken from it")
+    ap.add_argument("--touch-y-offset", type=int, default=0, metavar="N",
+                    help="(experimental) with --touch-config, move the touch point N DS pixels up")
     a = ap.parse_args()
     log(f"NVRAM-Emu patcher v{VERSION}")
+    global TOUCH_CAL
+    if a.touch_config:
+        TOUCH_CAL = touch_cal_from_config(a.touch_config, a.touch_y_offset)
     twlbg = get_twlbg(open(a.input, "rb").read())
     result = build(twlbg)
     dst = os.path.join(a.out, "nvramemu")
