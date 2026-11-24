@@ -9,7 +9,9 @@ TWiLight Menu++ boot again on consoles where 3DS mode works fine but every
 attempt to enter DS mode fails.
 
 > Tested on a New 2DS XL (USA, system 11.17.0-50U, Luma3DS v13.5).
-> DS cartridges and TWiLight Menu++ boot and run.
+> DS mode boots. ROMs from a DS flashcart (R4) run, including saving and
+> loading. Original cartridges boot, but games freeze when they access the
+> cartridge's save memory (see *Known issues*).
 
 ## Symptoms this fixes
 
@@ -62,7 +64,16 @@ from your own console's firmware.
 4. In GodMode9: **HOME → Scripts… → NVRAM-Emu → Enable patch**.
    Every step is shown on screen, any existing `TwlBg.cxi` (e.g. TWPatch) is
    backed up, and copies are verified with SHA-256.
-5. Reboot holding **SELECT** and enable in Luma:
+5. *(Optional, experimental)* use your console's own touch calibration
+   instead of the generic one. Copy
+   `[1:]/data/<id>/sysdata/00010017/00000000` with GodMode9
+   (*Copy to 0:/gm9/out*) and add it to step 2:
+   ```sh
+   python3 patcher/nvramemu_patcher.py <TWL_FIRM>.cxi --touch-config 00000000
+   ```
+   If the touch point is still too low, add `--touch-y-offset N` to move it up
+   by N DS pixels (30 ≈ 1 cm on a New 2DS XL).
+6. Reboot holding **SELECT** and enable in Luma:
    * `Enable loading external FIRMs and modules`
    * `Enable game patching`
 
@@ -83,13 +94,32 @@ To disable quickly without GodMode9, turn off
 
 * DS-mode Wi-Fi and local multiplayer do not work. The real chip holds the
   Wi-Fi calibration.
-* Touch calibration in DS mode is generic and may be slightly off.
+* Touch calibration in DS mode is generic and may be off. `--touch-config`
+  computes it from the console's 3DS calibration, but in testing the vertical
+  axis was still about 1 cm too low (hence `--touch-y-offset`); the cause is
+  being investigated with `experimental/touchcal`.
 * The emulated DS profile is fixed: name `USER`, birthday 1/1, language
   Spanish. Changes made in DS mode are lost on power-off.
 * Only the New 3DS TWL_FIRM from 11.17 has been analysed. Other versions are
   refused instead of being patched blindly.
 * Not compatible with other `TwlBg.cxi` mods (TWPatch filters/widescreen) at
   the same time. The manager backs them up and restores them.
+
+## Known issues
+
+* **Original cartridges freeze when a game reads or writes its save**
+  (Harvest Moon DS stays on a white screen at boot, Wario: Master of Disguise
+  and Bomberman freeze when starting a game). The same games run and save
+  from a flashcart, which redirects saves to its microSD. The game code that
+  talks to the cartridge save chip does not touch the NVRAM, so the cartridge
+  save bus is the current suspect.
+* TWiLight Menu++ may stop at *"Allocating space for RAM dump"*.
+
+## Experimental tools
+
+[`experimental/`](experimental/README.md) holds the research tools used to
+debug the issues above (launcher hook, beep detector, ROM patcher, diagnostic
+homebrew). They are not part of the release and some of them break flashcarts.
 
 ## Building the emulator from source
 
