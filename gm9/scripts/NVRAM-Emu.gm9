@@ -1,0 +1,179 @@
+# ==============================================================
+#  NVRAM-Emu  -  manager for the NVRAM emulation patch
+#  New 3DS / New 2DS XL  -  Luma3DS 13.x
+#  https://github.com/abrahampo1/NVRAM-Emu
+#
+#  When ACTIVE:
+#   1) luma/titles/0004001000021000/code.ips
+#      System Settings no longer crashes on invalid DS profile data.
+#   2) luma/sysmodules/TwlBg.cxi  (built with the PC patcher)
+#      - TwlBg does not show "An error has occurred" on NVRAM errors.
+#      - The DS-mode launcher (HNAA) uses a RAM-backed NVRAM instead
+#        of the physical SPI flash chip.
+#
+#  Required Luma options (boot holding SELECT):
+#   [x] Enable loading external FIRMs and modules
+#   [x] Enable game patching
+# ==============================================================
+
+set DIR    0:/nvramemu
+set LOG    0:/nvramemu/log.txt
+set SRC_BG 0:/nvramemu/TwlBg_nvramemu.cxi
+set SRC_IP 0:/nvramemu/mset_code.ips
+set DST_BG 0:/luma/sysmodules/TwlBg.cxi
+set DST_IP 0:/luma/titles/0004001000021000/code.ips
+set BAKDIR 0:/nvramemu/backup
+set H_IP   A5BB09A0853961C07145E1F4ACD1E3EB07919938DB57BD985B36542341975CB4
+
+set PREVIEW_MODE "NVRAM-Emu\n\nNVRAM emulation\nfor DS mode"
+allow -a 0:/luma
+allow -a 0:/nvramemu
+
+# --- check package files on the SD card ---
+if not exist $[SRC_BG]
+echo "ERROR: $[SRC_BG] not found.\n\nBuild it on your PC with\nnvramemu_patcher.py and copy the\n'nvramemu' folder to the SD root."
+goto finish
+end
+if not exist $[SRC_BG].sha
+echo "ERROR: $[SRC_BG].sha not found.\n\nCopy it together with the .cxi\n(the patcher creates both)."
+goto finish
+end
+if not sha $[SRC_BG] $[SRC_BG].sha
+echo "ERROR: $[SRC_BG]\nis corrupted (SHA-256 mismatch).\n\nCopy it again from your PC."
+goto finish
+end
+if not exist $[SRC_IP]
+echo "ERROR: $[SRC_IP] not found."
+goto finish
+end
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Script started"
+
+@menu
+labelsel -o -s "NVRAM-Emu - choose an option" menu_*
+goto finish
+
+# ---------------------------------------------------------------
+@menu_Show_status
+set ST_BG "INACTIVE (no TwlBg.cxi)"
+if exist $[DST_BG]
+if sha $[DST_BG] $[SRC_BG].sha
+set ST_BG "ACTIVE (verified)"
+else
+set ST_BG "OTHER TwlBg.cxi installed\n   (not NVRAM-Emu, e.g. TWPatch)"
+end
+end
+set ST_IP "INACTIVE"
+if exist $[DST_IP]
+if sha $[DST_IP] $[H_IP]
+set ST_IP "ACTIVE (verified)"
+else
+set ST_IP "OTHER code.ips installed"
+end
+end
+set ST_BK "no"
+if exist $[BAKDIR]/TwlBg.cxi
+set ST_BK "yes (previous TwlBg.cxi saved)"
+end
+echo "NVRAM-Emu STATUS\n\nTwlBg (DS mode):\n   $[ST_BG]\n\nSystem Settings patch:\n   $[ST_IP]\n\nBackup: $[ST_BK]\n\nRemember: Luma option 'Enable\nloading external FIRMs and\nmodules' must be enabled."
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Status: TwlBg=$[ST_BG] / mset=$[ST_IP]"
+goto menu
+
+# ---------------------------------------------------------------
+@menu_Enable_patch
+if not ask "NVRAM-Emu will be ENABLED.\n\nSteps:\n 1. Back up current TwlBg.cxi (if any)\n 2. Copy emulated TwlBg\n 3. Copy System Settings patch\n\nContinue?"
+goto menu
+end
+if not exist $[BAKDIR]
+mkdir $[BAKDIR]
+end
+if not exist 0:/luma/sysmodules
+echo "Step 0: creating 0:/luma/sysmodules"
+mkdir 0:/luma/sysmodules
+end
+if exist $[DST_BG]
+if not sha $[DST_BG] $[SRC_BG].sha
+echo "Step 1: another TwlBg.cxi exists.\nSaving it to:\n$[BAKDIR]/TwlBg.cxi"
+cp -w $[DST_BG] $[BAKDIR]/TwlBg.cxi
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Backed up previous TwlBg.cxi"
+else
+echo "Step 1: NVRAM-Emu already installed.\nIt will be rewritten."
+end
+else
+echo "Step 1: no TwlBg.cxi installed.\nNothing to back up."
+end
+echo "Step 2: copying emulated TwlBg to\n$[DST_BG]"
+cp -w $[SRC_BG] $[DST_BG]
+if not sha $[DST_BG] $[SRC_BG].sha
+echo "ERROR: copied TwlBg.cxi does not\nmatch (SHA-256). Check the SD card."
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] ERROR verifying copied TwlBg.cxi"
+goto menu
+end
+if not exist 0:/luma/titles/0004001000021000
+mkdir 0:/luma/titles/0004001000021000
+end
+echo "Step 3: copying System Settings\npatch to\n$[DST_IP]"
+cp -w $[SRC_IP] $[DST_IP]
+if not sha $[DST_IP] $[H_IP]
+echo "ERROR: copied code.ips does not\nmatch (SHA-256)."
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] ERROR verifying copied code.ips"
+goto menu
+end
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Patch ENABLED (files verified)"
+echo "DONE: NVRAM-Emu ENABLED.\n\nNext:\n - Reboot holding SELECT\n - Enable 'Enable loading external\n   FIRMs and modules' and\n   'Enable game patching'\n - Try a DS cartridge."
+goto menu
+
+# ---------------------------------------------------------------
+@menu_Disable_patch
+if not ask "NVRAM-Emu will be DISABLED.\n\nThe emulated TwlBg will be removed\nand your previous one restored\n(if a backup exists).\n\nContinue?"
+goto menu
+end
+if exist $[DST_BG]
+if sha $[DST_BG] $[SRC_BG].sha
+echo "Step 1: removing emulated TwlBg"
+rm $[DST_BG]
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Emulated TwlBg removed"
+else
+echo "Step 1: installed TwlBg.cxi is NOT\nNVRAM-Emu. Leaving it untouched."
+end
+else
+echo "Step 1: no TwlBg.cxi installed."
+end
+if exist $[BAKDIR]/TwlBg.cxi
+if not exist $[DST_BG]
+if ask "A previous TwlBg.cxi was saved.\nRestore it?"
+mv -w $[BAKDIR]/TwlBg.cxi $[DST_BG]
+echo "Step 2: previous TwlBg.cxi restored."
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Previous TwlBg.cxi restored"
+end
+end
+end
+if exist $[DST_IP]
+if ask "Also remove the System Settings\npatch (code.ips)?\n\nWithout it, System Settings will\ncrash again on 'Nintendo DS\nConnections'."
+rm $[DST_IP]
+echo "Step 3: code.ips removed."
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] code.ips removed"
+end
+end
+dumptxt -p $[LOG] "[$[DATESTAMP] $[TIMESTAMP]] Patch DISABLED"
+echo "DONE: NVRAM-Emu DISABLED.\n\nThe console returns to its previous\nstate on the next boot."
+goto menu
+
+# ---------------------------------------------------------------
+@menu_View_log
+if exist $[LOG]
+textview $[LOG]
+else
+echo "No log yet."
+end
+goto menu
+
+# ---------------------------------------------------------------
+@menu_About
+echo "NVRAM-Emu\n\nThe NVRAM chip (SPI flash with the\nDS-mode settings) does not respond.\n\nThis patch replaces its driver in\nthe DS launcher with RAM-backed\nemulation:\n - status: always ready\n - valid header and user profile\n   (name USER, 1/1, Spanish)\n - writes: RAM only\n\nDS-mode Wi-Fi: unavailable.\nTouch: generic calibration."
+goto menu
+
+# ---------------------------------------------------------------
+@menu_Exit
+goto finish
+
+@finish

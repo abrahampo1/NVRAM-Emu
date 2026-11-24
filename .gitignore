@@ -1,0 +1,10 @@
+# firmware dumps and build output (never commit Nintendo code)
+*.cxi
+*.firm
+*.app
+*.bin
+*.sha
+out/
+__pycache__/
+*.pyc
+.DS_Store
